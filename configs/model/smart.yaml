@@ -1,0 +1,52 @@
+_target_: src.smart.model.smart.SMART
+model_config:
+  lr: 0.0005
+  lr_warmup_steps: 0
+  lr_total_steps: ${trainer.max_epochs}
+  lr_min_ratio: 0.05
+  n_rollout_closed_val: 32
+  n_batch_wosac_metric: 10
+  n_vis_batch: 2
+  n_vis_scenario: 5
+  n_vis_rollout: 5
+  val_open_loop: true
+  val_closed_loop: true
+  token_processor:
+    map_token_file: "map_traj_token5.pkl"
+    agent_token_file: "trajtok_vocab.pkl" 
+    map_token_sampling: # open-loop
+      num_k: 1 # for k nearest neighbors
+      temp: 1.0 # uniform sampling
+    agent_token_sampling: # closed-loop
+      num_k: 1 # for k nearest neighbors
+      temp: 1.0
+  validation_rollout_sampling:
+    criterium: topk_prob
+    num_k: 5 # for k most likely
+    temp: 1.0
+  decoder:
+    hidden_dim: 128
+    num_freq_bands: 64
+    num_heads: 8
+    head_dim: 16
+    dropout: 0.1
+    hist_drop_prob: 0.1
+    num_map_layers: 3
+    num_agent_layers: 6
+    pl2pl_radius: 10
+    pl2a_radius: 30
+    a2a_radius: 60
+    time_span: 30
+    num_historical_steps: 11
+    num_future_steps: 80
+  wosac_submission:
+    is_active: false
+    method_name: "TrajTok"
+    authors: [Anonymous]
+    affiliation: YOUR_AFFILIATION
+    description: YOUR_DESCRIPTION
+    method_link: YOUR_METHOD_LINK
+    account_name: YOUR_ACCOUNT_NAME
+  training_loss:
+    label_smoothing: 0.1
+

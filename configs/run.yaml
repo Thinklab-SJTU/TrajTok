@@ -1,0 +1,29 @@
+# @package _global_
+
+# specify here default configuration
+# order of defaults determines the order in which configs override each other
+defaults:
+  - _self_
+  - data: waymo
+  - model: smart
+  - callbacks: default
+  - logger: wandb
+  - trainer: default
+  - paths: default
+  - hydra: default
+
+  # experiment configs allow for version control of specific hyperparameters
+  # e.g. best hyperparameters for given model and datamodule
+  - experiment: train
+
+action: fit # fit, validate, test
+
+# task name, determines output directory path
+task_name: "debug_open_source"
+
+# simply provide checkpoint path to resume training
+ckpt_path: null
+train_log_dir: null
+
+# seed for random number generators in pytorch, numpy and python.random
+seed: 42

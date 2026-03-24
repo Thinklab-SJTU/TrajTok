@@ -1,0 +1,13 @@
+_target_: src.smart.datamodules.MultiDataModule
+train_batch_size: 3
+val_batch_size: 3
+test_batch_size: 3
+num_workers: 8
+shuffle: true
+pin_memory: true
+persistent_workers: true
+train_raw_dir: data/waymo_processed/training
+val_raw_dir: data/waymo_processed/validation
+test_raw_dir: data/waymo_processed/testing
+val_gt_scenario_dir: data/waymo_processed/validation_gt
+train_max_num: 32

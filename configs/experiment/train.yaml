@@ -1,0 +1,44 @@
+# @package _global_
+
+defaults:
+  # - override /trainer: ddp
+  - override /model: smart
+
+model:
+  model_config:
+    lr: 5e-4
+    lr_min_ratio: 1e-2
+    token_processor:
+      map_token_sampling: # open-loop
+        num_k: 1 # for k nearest neighbors
+        temp: 1.0 # uniform sampling
+      agent_token_sampling: # closed-loop
+        num_k: 1 # for k nearest neighbors
+        temp: 1.0
+      agent_token_file: "trajtok_vocab.pkl" 
+    training_loss:
+      label_smoothing: 0.1
+      spatial_aware_smoothing: true
+    val_open_loop: true
+    val_closed_loop: false
+
+ckpt_path: null 
+
+trainer:
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  check_val_every_n_epoch: -1
+  max_epochs: 32
+
+data:
+  train_batch_size: 8
+  val_batch_size: 8
+  test_batch_size: 8
+  num_workers: 12
+
+  random_scene_scale_config: {
+      'SCALE_RANGE': [0.8, 1.2]
+  }
+  random_time_shift_config: {
+      'MAX_TIME_SHIFT': 5
+  }
