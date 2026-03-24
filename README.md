@@ -18,7 +18,7 @@ It is **very slow** to compute the WOSAC metrics with the official code. It usua
 
 For **fast evaluation and quick development**, we developed the **fast WOSAC metric** that reduces the time to about **0.4s/scenario** while maintain the error of each indicator from the official less than $10^{-6}$. The tool supports both **2024 and 2025 version** of WOSAC metric and is easy to use in both **online and offline** modes.
 
-Please refer to() for more information.
+Please refer the [document](fast_WOSAC_metric.md) for more information.
 
 ## Environment Setup
 
