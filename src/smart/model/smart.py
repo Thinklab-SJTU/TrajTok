@@ -90,7 +90,7 @@ class SMART(LightningModule):
             type_mask = tokenized_agent["type_mask"]
             pred_by_type = pred["next_token_logits"]
             pred_valid_by_type = split_by_type(pred["next_token_valid"], type_mask)
-            target_by_type = split_by_type(tokenized_agent["gt_idx"], type_mask)
+            target_by_type = split_by_type(tokenized_agent["token_idx"], type_mask)
             target_valid_by_type = split_by_type(tokenized_agent["valid_mask"], type_mask)
             for agent_type in type_mask.keys():
                 if pred_valid_by_type[agent_type].sum() > 0:
