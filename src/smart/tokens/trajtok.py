@@ -25,7 +25,7 @@ class TrajTok:
         self.filter_threshold_add = {'veh': 20, 'ped': 2, 'cyc': 20}
         self.filter_threshold_remove = {'veh': 20, 'ped': 18, 'cyc': 20}
         # logged data extracting settings
-        self.raw_data_path = 'data/waymo_processed/train'
+        self.raw_data_path = 'data/waymo_processed/training'
         self.traj_data_path = 'data/waymo_processed/traj_data.pkl'
         self.max_workers = 16
         self.max_file_nums = 500000
