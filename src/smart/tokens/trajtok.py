@@ -15,21 +15,24 @@ class TrajTok:
         # grid settings
         self.x_max = {'veh': 20, 'ped': 4.5, 'cyc': 8}
         self.x_min = {'veh': -5, 'ped': -1.5, 'cyc': -1}
-        self.y_max = {'veh': 3, 'ped': 2, 'cyc': 1}
+        self.y_max = {'veh': 2, 'ped': 2, 'cyc': 1}
         self.y_min = {'veh': -2, 'ped': -2, 'cyc': -1}
         self.x_binnum = {'veh': 250, 'ped': 120, 'cyc': 180} # 0.05
         self.y_binnum = {'veh': 80, 'ped': 80, 'cyc': 40}  # 0.05
         # filter settings
-        self.valid_count_threshold = {'veh': 3, 'ped': 1, 'cyc': 1}
-        self.filter_range = {'veh': 4, 'ped': 4, 'cyc': 4}
-        self.filter_threshold_add = {'veh': 20, 'ped': 20, 'cyc': 20}
-        self.filter_threshold_remove = {'veh': 20, 'ped': 20, 'cyc': 20}
+        self.valid_count_threshold = {'veh': 6, 'ped': 1, 'cyc': 6}
+        self.filter_range = {'veh': 4, 'ped': 2, 'cyc': 4}
+        self.filter_threshold_add = {'veh': 20, 'ped': 2, 'cyc': 20}
+        self.filter_threshold_remove = {'veh': 20, 'ped': 18, 'cyc': 20}
         # logged data extracting settings
-        self.raw_data_path = 'data/waymo_processed_catk/training'
-        self.traj_data_path = 'data/waymo_processed_catk/traj_data.pkl'
+        self.raw_data_path = 'data/waymo_processed/train'
+        self.traj_data_path = 'data/waymo_processed/traj_data.pkl'
         self.max_workers = 16
-        self.max_file_nums = 50000
-        self.max_traj_nums = 12000000
+        self.max_file_nums = 500000
+        self.max_traj_nums = {'veh': 12000000, 'ped': 1490000, 'cyc': None}
+        self.aggregation_chunk_size = 500000
+        self.random_seed = 0
+        self.rng = np.random.RandomState(self.random_seed)
         self.use_cache= True
         # output settings
         self.output_path = 'src/smart/tokens/trajtok_vocab.pkl'
@@ -152,27 +155,150 @@ class TrajTok:
         nearest_traj = np.array(trajs_in_bin[nearest_x][nearest_y]).mean(axis=0)
         return nearest_traj    
 
-    def interpolate_curve(self, x, y, theta, weight_factor0=0, weight_factor1=0, num_points=6):
+    def selection_indices(total, requested):
+        if requested is None or requested >= total:
+            return None
+        return np.linspace(0, total - 1, requested, dtype=np.int64)
 
-        p0 = np.array([0, 0])
-        p1 = np.array([x, y])
-        dist = np.linalg.norm(p1 - p0)
-        t0 = np.array([1, 0]) * dist * weight_factor0
-        t1 = np.array([np.cos(theta), np.sin(theta)]) * dist * weight_factor1
-        t_vals = [0, 1]                    
-        points = np.vstack((p0, p1))       
-        tangents = np.vstack((t0, t1))      
-        spline = CubicHermiteSpline(t_vals, points, tangents)
-        t_curve = np.linspace(0, 1, num_points)
-        derivatives = spline(t_curve, nu=1)
-        xys = spline(t_curve)
-        headings = np.arctan2(derivatives[:, 1], derivatives[:, 0])
-        curve_points = np.concatenate([xys, headings[:, None]], axis=-1)
-        
-        return curve_points   
+    def aggregate_class(self, trajectories, agent_class):
+        x_min, x_max = self.x_min[agent_class], self.x_max[agent_class]
+        y_min, y_max = self.y_min[agent_class], self.y_max[agent_class]
+        x_binnum = self.x_binnum[agent_class]
+        y_binnum = self.y_binnum[agent_class]
+        num_cells = x_binnum * y_binnum
+
+        indices = self.selection_indices(
+            len(trajectories), self.max_traj_nums[agent_class]
+        )
+        selected = len(trajectories) if indices is None else len(indices)
+        grid_count = np.zeros(num_cells, dtype=np.int64)
+        grid_sum = np.zeros(
+            (num_cells, self.shift + 1, 3), dtype=np.float64
+        )
+        flip_sign = np.array([1.0, -1.0, -1.0], dtype=np.float64)
+
+        for start in range(0, selected, self.aggregation_chunk_size):
+            stop = min(start + self.aggregation_chunk_size, selected)
+            if indices is None:
+                chunk = np.asarray(trajectories[start:stop])
+            else:
+                chunk = np.asarray(trajectories[indices[start:stop]])
+
+            chunk_yaw = (
+                chunk[:, :, 2].astype(np.float64, copy=False) + np.pi
+            ) % (2.0 * np.pi) - np.pi
+            endpoint_x = chunk[:, -1, 0]
+            endpoint_y = chunk[:, -1, 1]
+            grid_x = np.round(
+                (endpoint_x - x_min) / (x_max - x_min) * x_binnum
+            ).astype(np.int32)
+            grid_y = np.round(
+                (endpoint_y - y_min) / (y_max - y_min) * y_binnum
+            ).astype(np.int32)
+            grid_y_flip = np.round(
+                (-endpoint_y - y_min) / (y_max - y_min) * y_binnum
+            ).astype(np.int32)
+
+            path_valid = (
+                np.abs(chunk[:, :, 0]).sum(axis=1) / (self.shift + 1) < x_max
+            ) & (
+                np.abs(chunk[:, :, 1]).sum(axis=1) / (self.shift + 1) < y_max
+            )
+            valid = (
+                path_valid
+                & (grid_x >= 0)
+                & (grid_x < x_binnum)
+                & (grid_y >= 0)
+                & (grid_y < y_binnum)
+            )
+            valid_flip = (
+                path_valid
+                & (grid_x >= 0)
+                & (grid_x < x_binnum)
+                & (grid_y_flip >= 0)
+                & (grid_y_flip < y_binnum)
+            )
+            cell = grid_x[valid].astype(np.int64) * y_binnum + grid_y[valid]
+            cell_flip = (
+                grid_x[valid_flip].astype(np.int64) * y_binnum
+                + grid_y_flip[valid_flip]
+            )
+
+            grid_count += np.bincount(cell, minlength=num_cells)
+            if self.flip_trajs:
+                grid_count += np.bincount(cell_flip, minlength=num_cells)
+
+            for time_index in range(self.shift):
+                values = chunk[:, time_index, :].astype(np.float64, copy=True)
+                values[:, 2] = chunk_yaw[:, time_index]
+                for feature_index in range(3):
+                    grid_sum[:, time_index + 1, feature_index] += np.bincount(
+                        cell,
+                        weights=values[valid, feature_index],
+                        minlength=num_cells,
+                    )
+                    if self.flip_trajs:
+                        grid_sum[:, time_index + 1, feature_index] += np.bincount(
+                            cell_flip,
+                            weights=(
+                                values[valid_flip, feature_index]
+                                * flip_sign[feature_index]
+                            ),
+                            minlength=num_cells,
+                        )
+
+            print(
+                f"{agent_class}: aggregated {stop:,}/{selected:,} "
+                f"({100.0 * stop / selected:5.1f}%)",
+                flush=True,
+            )
+
+        grid_mean = np.zeros_like(grid_sum)
+        occupied = grid_count > 0
+        grid_mean[occupied] = (
+            grid_sum[occupied] / grid_count[occupied, None, None]
+        )
+        return (
+            grid_count.reshape(x_binnum, y_binnum),
+            grid_mean.reshape(
+                x_binnum, y_binnum, self.shift + 1, 3
+            ),
+        )
+
+    def _interpolate_curves(self, end_x, end_y, random_values):
+        a = random_values[:, 0] * 4.0 - 2.0
+        b = random_values[:, 1] * 4.0 - 2.0
+        a_y = random_values[:, 2] * 4.0 - 2.0
+        t = self.t
+        c = (end_x - a * t**3 - b * t**2) / t
+        b_y = (end_y - a_y * t**3) / t**2
+        time = np.arange(self.shift + 1, dtype=np.float64) * 0.1
+        traj_x = (
+            a[:, None] * time[None, :] ** 3
+            + b[:, None] * time[None, :] ** 2
+            + c[:, None] * time[None, :]
+        )
+        traj_y = (
+            a_y[:, None] * time[None, :] ** 3
+            + b_y[:, None] * time[None, :] ** 2
+        )
+        position = np.stack((traj_x, traj_y), axis=-1)
+        heading = np.arctan2(np.diff(traj_y, axis=1), np.diff(traj_x, axis=1))
+        heading = np.concatenate(
+            (np.zeros((len(traj_x), 1)), heading), axis=1
+        )
+        return np.concatenate((position, heading[:, :, None]), axis=-1)
+
+    def interpolate_curve(self, x, y):
+        return self._interpolate_curves(
+            np.asarray([x]),
+            np.asarray([y]),
+            self.rng.rand(1, 3),
+        )[0]
 
     
     def get_trajtok_vocab(self):
+        self.rng = np.random.RandomState(self.random_seed)
         self.vocab = {}
         self.vocab['token'] = {}
         self.vocab['traj'] = {}
@@ -191,42 +317,15 @@ class TrajTok:
             filter_threshold_remove = self.filter_threshold_remove[agent_class]
             valid_count_threshold = self.valid_count_threshold[agent_class]
 
-            grid_mask_count = np.zeros((x_binnum, y_binnum))
-            traj_in_bin = [[[] for _ in range(y_binnum)] for _ in range(x_binnum)]
-            trajs = np.concatenate([np.zeros((self.traj_data[agent_class].shape[0],1,3)),
-                                        self.traj_data[agent_class]], axis=1) #.numpy()
-            if self.max_traj_nums:
-                trajs = trajs[:self.max_traj_nums]
-
-            if self.flip_trajs:
-                flip = trajs.copy()
-                flip[:,:,1] = -flip[:,:,1]
-                flip[:,:,2] = -flip[:,:,2]
-                trajs = np.concatenate([trajs, flip], axis=0)
-
-            grid_end_x = np.round((trajs[:, self.shift, 0] - x_min) /
-                                     (x_max - x_min) * x_binnum).astype(np.int32)
-            grid_end_y = np.round((trajs[:, self.shift, 1] - y_min) /
-                                     (y_max - y_min) * y_binnum).astype(np.int32)
-            mask = (grid_end_x >= 0) & (grid_end_x < x_binnum) & \
-                    (grid_end_y >= 0) & (grid_end_y < y_binnum) & \
-                    (np.abs(trajs[:, :, 0]).mean(axis=-1) < x_max) & \
-                    (np.abs(trajs[:, :, 1]).mean(axis=-1) < y_max)
-            
-            grid_end_x = grid_end_x[mask]
-            grid_end_y = grid_end_y[mask]
-            trajs = trajs[mask]
-
-            for i in range(len(trajs)):
-                traj_in_bin[grid_end_x[i]][grid_end_y[i]].append(trajs[i])
-
-            raw_eps = []
-            for x in range(x_binnum):
-                for y in range(y_binnum):
-                    grid_mask_count[x][y] = len(traj_in_bin[x][y])
-                    raw_eps.append([x * (x_max - x_min) / x_binnum + x_min,
-                                    y * (y_max - y_min) / y_binnum + y_min])
-            self.vocab['raw_ep'][agent_class] = np.array(raw_eps)
+            grid_mask_count, grid_mean = self.aggregate_class(
+                self.traj_data[agent_class], agent_class
+            )
+            raw_cells = np.indices((x_binnum, y_binnum)).reshape(2, -1).T
+            raw_eps = np.column_stack((
+                raw_cells[:, 0] * (x_max - x_min) / x_binnum + x_min,
+                raw_cells[:, 1] * (y_max - y_min) / y_binnum + y_min,
+            ))
+            self.vocab['raw_ep'][agent_class] = raw_eps
             grid_mask = (grid_mask_count >= valid_count_threshold)
 
             grid_mask_filtered = grid_mask.copy()
@@ -237,29 +336,23 @@ class TrajTok:
                         grid_mask_filtered[x,y] = False
                     if not grid_mask[x,y] and neighbors.sum() > filter_threshold_add:
                         grid_mask_filtered[x,y] = True          
-            token_trajs = []
-            for x in range(x_binnum):
-                for y in range(y_binnum):
-                    if not grid_mask_filtered[x,y]:
-                        continue
-                    
-                    grid_end_x = x * (x_max - x_min) / x_binnum + x_min
-                    grid_end_y = y * (y_max - y_min) / y_binnum + y_min
+            cells = np.argwhere(grid_mask_filtered)
+            empirical = grid_mask[cells[:, 0], cells[:, 1]]
+            endpoint_xy = raw_eps[cells[:, 0] * y_binnum + cells[:, 1]]
+            token_trajs = np.zeros(
+                (len(cells), self.shift + 1, 3), dtype=np.float64
+            )
+            token_trajs[empirical] = grid_mean[
+                cells[empirical, 0], cells[empirical, 1]
+            ]
+            token_trajs[empirical, -1, :2] = endpoint_xy[empirical]
 
-                    if grid_mask[x,y]:
-                        token_traj = np.array(traj_in_bin[x][y]).mean(axis=0)                  
-                        token_traj[-1,0] = grid_end_x
-                        token_traj[-1,1] = grid_end_y
-                        yaws = token_traj[:,-1]
-                        if np.abs((yaws[1:] - yaws[:-1])).max() > 10 * np.pi/180:
-                            nearest_traj = self.get_nearest_traj(x, y, grid_mask & grid_mask_filtered, traj_in_bin)
-                            token_traj = self.interpolate_curve(grid_end_x, grid_end_y, nearest_traj[-1,2])
-                    else:
-                        nearest_traj = self.get_nearest_traj(x, y, grid_mask & grid_mask_filtered, traj_in_bin)
-                        token_traj = self.interpolate_curve(grid_end_x, grid_end_y, nearest_traj[-1,2])
-                    token_trajs.append(token_traj)
-
-            token_trajs = np.stack(token_trajs) # [n_token, shift+1, 3]
+            generated = ~empirical
+            token_trajs[generated] = self._interpolate_curves(
+                endpoint_xy[generated, 0],
+                endpoint_xy[generated, 1],
+                self.rng.rand(int(generated.sum()), 3),
+            )
             if agent_class == "veh":
                 width_length = np.array([2.0, 4.8])
             elif agent_class == "ped":
@@ -278,8 +371,9 @@ class TrajTok:
             print(agent_class, token_countour.shape)
 
         with open(self.output_path, 'wb') as f:
-            pickle.dump(self.vocab, f)
+            pickle.dump(self.vocab, f, protocol=pickle.HIGHEST_PROTOCOL)
         print('token vocab generated')
 
-generator = TrajTok()
-generator.get_trajtok_vocab()
+if __name__ == '__main__':
+    generator = TrajTok()
+    generator.get_trajtok_vocab()
